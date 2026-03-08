@@ -14,7 +14,7 @@ A Python script to automatically sync all your forked GitHub repositories with t
 ## Prerequisites
 
 - Python 3.6 or higher
-- GitHub Personal Access Token with `repo` and `workflow` scopes
+- GitHub Personal Access Token with `repo` scope (or `public_repo` for public-only repos)
 
 ## Installation
 
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 3. Give it a descriptive name (e.g., "Fork Sync Tool")
 4. Select the following scopes:
    - ✅ `repo` (Full control of private repositories)
-   - ✅ `workflow` (Update GitHub Action workflows)
+   - (Optional) `public_repo` if you only need access to public repositories
 5. Click "Generate token"
 6. **Copy the token** (you won't be able to see it again!)
 

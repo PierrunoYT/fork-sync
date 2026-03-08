@@ -8,13 +8,14 @@ import os
 import sys
 import argparse
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import requests
-from datetime import datetime
 
 
 class GitHubForkSyncer:
     """Handles syncing of forked repositories with their upstream branches."""
+
+    REQUEST_TIMEOUT_SECONDS = 20
     
     def __init__(self, token: str, default_branch: str = "main"):
         """
@@ -43,7 +44,7 @@ class GitHubForkSyncer:
     def get_authenticated_user(self) -> str:
         """Get the authenticated user's username."""
         url = f"{self.base_url}/user"
-        response = requests.get(url, headers=self.headers)
+        response = requests.get(url, headers=self.headers, timeout=self.REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
         return response.json()["login"]
     
@@ -71,7 +72,7 @@ class GitHubForkSyncer:
                 "page": page
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = requests.get(url, headers=self.headers, params=params, timeout=self.REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
             repos = response.json()
             
@@ -99,7 +100,7 @@ class GitHubForkSyncer:
         """
         return repo.get("default_branch", self.default_branch)
     
-    def sync_fork_with_upstream(self, owner: str, repo_name: str, branch: Optional[str] = None) -> bool:
+    def sync_fork_with_upstream(self, owner: str, repo_name: str, branch: Optional[str] = None) -> Union[bool, str]:
         """
         Sync a fork with its upstream repository.
         
@@ -118,19 +119,28 @@ class GitHubForkSyncer:
         }
         
         try:
-            response = requests.post(url, headers=self.headers, json=data)
+            response = requests.post(url, headers=self.headers, json=data, timeout=self.REQUEST_TIMEOUT_SECONDS)
             
             if response.status_code == 200:
                 self.logger.info(f"✓ Successfully synced {owner}/{repo_name} (branch: {data['branch']})")
                 return True
             elif response.status_code == 204:
                 self.logger.info(f"✓ {owner}/{repo_name} is already up-to-date (branch: {data['branch']})")
-                return True
+                return "already_synced"
+            elif response.status_code == 202:
+                self.logger.info(f"↻ Sync started for {owner}/{repo_name} (branch: {data['branch']})")
+                return "accepted"
             elif response.status_code == 409:
                 self.logger.warning(f"⚠ Merge conflict in {owner}/{repo_name} (branch: {data['branch']}) - manual intervention required")
                 return False
             elif response.status_code == 404:
                 self.logger.warning(f"⚠ Upstream not found for {owner}/{repo_name} or branch doesn't exist")
+                return False
+            elif response.status_code == 403:
+                self.logger.error(f"✗ Permission denied for {owner}/{repo_name} (bad token/scopes or rate limit reached)")
+                return False
+            elif response.status_code == 422:
+                self.logger.warning(f"⚠ Cannot merge {owner}/{repo_name} (branch not valid or not yet available)")
                 return False
             else:
                 self.logger.error(f"✗ Failed to sync {owner}/{repo_name}: {response.status_code} - {response.text}")
@@ -191,9 +201,13 @@ class GitHubForkSyncer:
                     self.logger.info(f"    Would sync branch: {default_branch}")
                     continue
                 
-                success = self.sync_fork_with_upstream(username, repo_name, default_branch)
-                
-                if success:
+                sync_status = self.sync_fork_with_upstream(username, repo_name, default_branch)
+                if sync_status is True:
+                    stats["success"] += 1
+                elif sync_status == "already_synced":
+                    stats["already_synced"] += 1
+                    stats["success"] += 1
+                elif sync_status == "accepted":
                     stats["success"] += 1
                 else:
                     stats["failed"] += 1
@@ -215,6 +229,7 @@ class GitHubForkSyncer:
         self.logger.info(f"{'='*60}")
         self.logger.info(f"Total forks found:    {stats['total']}")
         self.logger.info(f"Successfully synced:  {stats['success']}")
+        self.logger.info(f"Already up-to-date:   {stats['already_synced']}")
         self.logger.info(f"Failed to sync:       {stats['failed']}")
         self.logger.info(f"Skipped:              {stats['skipped']}")
         self.logger.info(f"{'='*60}\n")
@@ -242,7 +257,7 @@ Examples:
 Environment Variables:
   GITHUB_TOKEN: Your GitHub personal access token (required)
                 Create one at: https://github.com/settings/tokens
-                Required scopes: repo, workflow
+                Required scopes: repo (or public_repo for public-only repos)
         """
     )
     
@@ -277,7 +292,7 @@ Environment Variables:
         print("Error: GitHub token is required!")
         print("Either set GITHUB_TOKEN environment variable or use --token argument")
         print("\nCreate a token at: https://github.com/settings/tokens")
-        print("Required scopes: repo, workflow")
+        print("Required scopes: repo (or public_repo for public-only repos)")
         sys.exit(1)
     
     # Create syncer and run
